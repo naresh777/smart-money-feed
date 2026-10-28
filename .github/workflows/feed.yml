@@ -1,0 +1,63 @@
+name: Build feed
+
+# Rebuilds smart-feed.json and publishes it on GitHub Pages.
+# Tuesday to Saturday at 10:30 UTC (6:30 am New York): the SEC posts each business day's filing index that night,
+# so each run picks up the previous business day's insider filings before the US open.
+on:
+  schedule:
+    - cron: '30 10 * * 2-6'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [build.js, lib.js, .github/workflows/feed.yml]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: feed
+  cancel-in-progress: false
+
+jobs:
+  feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pdftotext
+        run: sudo apt-get update -q && sudo apt-get install -y -q poppler-utils
+      - name: Get the current feed
+        # the live file is the state: each run only reads filings that are new since it
+        run: |
+          mkdir -p public
+          curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/smart-feed.json" -o public/smart-feed.json \
+            || { rm -f public/smart-feed.json; echo "No live feed yet: building from scratch"; }
+      - name: Build the feed
+        run: node build.js
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      - name: Record the run
+        # a small commit per run also keeps GitHub from pausing the schedule on a quiet repository
+        run: |
+          node -e 'const f=require("./public/smart-feed.json");require("fs").writeFileSync("status.json",JSON.stringify({generatedAt:f.generatedAt,secMissing:f.secMissing,insiderBuys:f.insider.buys.length,funds:f.funds.length,congressTrades:f.congress.trades.length,priced:Object.keys(f.prices).length},null,2)+"\n")'
+          cp status.json public/status.json
+          git config user.name "smart-money-feed[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add status.json
+          git diff --cached --quiet && exit 0
+          git commit -qm "Feed $(date -u +%F)"
+          git pull -q --rebase origin main && git push -q origin HEAD:main
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deploy
+        uses: actions/deploy-pages@v4
