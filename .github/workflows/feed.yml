@@ -39,11 +39,22 @@ jobs:
         run: |
           mkdir -p public
           curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/smart-feed.json" -o public/smart-feed.json \
-            || { rm -f public/smart-feed.json; echo "No live feed yet: building from scratch"; }
+            || { rm -f public/smart-feed.json; echo "No live feed: using the last build if there is one"; }
+      # the last build, in case the page could not be read or a deploy failed (saves rebuilding 30 days of filings)
+      - if: hashFiles('public/smart-feed.json') == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: public/smart-feed.json
+          key: feed-${{ github.run_id }}
+          restore-keys: feed-
       - name: Build the feed
         run: node build.js
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      - uses: actions/cache/save@v4
+        with:
+          path: public/smart-feed.json
+          key: feed-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Record the run
         # a small commit per run also keeps GitHub from pausing the schedule on a quiet repository
         run: |
